@@ -444,7 +444,19 @@ class GCodeHelper:
                              self._handle_subscribe_output)
     def _handle_help(self, web_request):
         web_request.send(self.gcode.get_command_help())
+    def _output_callback_gcode(self, msg):
+        if self.is_output_registered:
+            for cconn, template in list(self.clients.items()):
+                if cconn.is_closed():
+                    del self.clients[cconn]
+                    continue
+                tmp = dict(template)
+                if 'key' in tmp and tmp['key'] == 1945:
+                    tmp['params'] = {'response': msg}
+                    cconn.send(tmp)
+                    break;
     def _handle_script(self, web_request):
+        self._output_callback_gcode(">> " + web_request.get_str('script'))
         self.gcode.run_script(web_request.get_str('script'))
     def _handle_restart(self, web_request):
         self.gcode.run_script('restart')

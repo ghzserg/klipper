@@ -284,20 +284,20 @@ def check_build_c_library():
     srcfiles = get_abs_files(srcdir, SOURCE_FILES)
     ofiles = get_abs_files(srcdir, OTHER_FILES)
     destlib = get_abs_files(srcdir, [DEST_LIB])[0]
-    if not check_build_code(srcfiles+ofiles+[__file__], destlib):
-        # Code already built
-        return destlib
-    # Select command line options
-    if check_gcc_option(SSE_FLAGS):
-        cmd = "%s %s %s" % (GCC_CMD, SSE_FLAGS, COMPILE_ARGS)
-    else:
-        cmd = "%s %s" % (GCC_CMD, COMPILE_ARGS)
-    # Invoke compiler
-    logging.info("Building C code module %s", DEST_LIB)
-    tempdestlib = get_abs_files(srcdir, ["_temp_" + DEST_LIB])[0]
-    do_build_code(cmd % (tempdestlib, ' '.join(srcfiles)))
-    # Rename from temporary file to final file name
-    os.rename(tempdestlib, destlib)
+    #if not check_build_code(srcfiles+ofiles+[__file__], destlib):
+    #    # Code already built
+    #    return destlib
+    ## Select command line options
+    #if check_gcc_option(SSE_FLAGS):
+    #    cmd = "%s %s %s" % (GCC_CMD, SSE_FLAGS, COMPILE_ARGS)
+    #else:
+    #    cmd = "%s %s" % (GCC_CMD, COMPILE_ARGS)
+    ## Invoke compiler
+    #logging.info("Building C code module %s", DEST_LIB)
+    #tempdestlib = get_abs_files(srcdir, ["_temp_" + DEST_LIB])[0]
+    #do_build_code(cmd % (tempdestlib, ' '.join(srcfiles)))
+    ## Rename from temporary file to final file name
+    #os.rename(tempdestlib, destlib)
     return destlib
 
 FFI_main = None

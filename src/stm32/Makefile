@@ -89,13 +89,19 @@ src-$(CONFIG_USBCANBUS) += $(usb-src-y) $(canbus-src-y)
 src-$(CONFIG_USBCANBUS) += stm32/chipid.c generic/usb_canbus.c
 src-$(CONFIG_WANT_HARD_PWM) += stm32/hard_pwm.c
 src-$(CONFIG_HAVE_GPIO_SDIO) += stm32/sdio.c
+src-$(CONFIG_FLASHFORGE_LOADCELL) += stm32/flashforge_load_cell.c
+src-$(CONFIG_FLASHFORGE_TVOC) += stm32/flashforge_tvoc.c
 
 # Binary output file rules
-target-y += $(OUT)klipper.bin
+target-y += $(OUT)klipper.bin $(OUT)klipper.hex
 
 $(OUT)klipper.bin: $(OUT)klipper.elf
 	@echo "  Creating bin file $@"
 	$(Q)$(OBJCOPY) -O binary $< $@
+
+$(OUT)klipper.hex: $(OUT)klipper.elf
+	@echo "  Creating hex file $@"
+	$(Q)$(OBJCOPY) -O ihex $< $@
 
 # Flash rules
 lib/hidflash/hid-flash:

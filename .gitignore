@@ -3,4 +3,4 @@ out
 *.pyc
 .config
 .config.old
-klippy/.version
+klippy/chelper/Makefile

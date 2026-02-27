@@ -335,6 +335,7 @@ class ProbeParameterHelper:
 class ProbeSessionHelper:
     def __init__(self, config, param_helper, start_session_cb):
         self.printer = config.get_printer()
+        self.z_offset = config.getfloat('z_offset')
         self.param_helper = param_helper
         self.start_session_cb = start_session_cb
         # Session state
@@ -386,6 +387,8 @@ class ProbeSessionHelper:
         gcode = self.printer.lookup_object('gcode')
         gcode.respond_info("probe: at %.3f,%.3f bed will contact at z=%.6f"
                            % (epos.bed_x, epos.bed_y, epos.bed_z))
+        gcode.respond_info("probe at %.3f,%.3f is z=%.6f"
+                           % (epos.bed_x, epos.bed_y, epos.bed_z + self.z_offset))
         return epos
     def run_probe(self, gcmd):
         if self.hw_probe_session is None:
