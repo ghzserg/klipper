@@ -6,7 +6,7 @@ import mcu
 
 from enum import Enum
 
-MCU_FLASHFORGE_RESPONSE = "flashforge_loadcell_response"
+MCU_FLASHFORGE_RESPONSE = "flashforge_loadcell_response status=%s command=%s value=%i raw_response=%s"
 
 MCU_CMD_FLASHFORGE_H1 = "flashforge_loadcell_h1"
 MCU_CMD_FLASHFORGE_H2 = "flashforge_loadcell_h2 weight=%u"

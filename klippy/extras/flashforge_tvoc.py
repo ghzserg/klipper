@@ -1,7 +1,7 @@
 import logging
 import mcu
 
-MCU_TVOC_RESPONSE = "flashforge_tvoc_response"
+MCU_TVOC_RESPONSE = "flashforge_tvoc_response co2=%u tvoc=%u hcho=%u status=%s"
 
 REPORT_TIME = 0.5
 
