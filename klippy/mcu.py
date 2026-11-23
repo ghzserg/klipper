@@ -699,6 +699,13 @@ class MCURestartHelper:
         raise error("Attempt MCU '%s' restart failed" % (self._name,))
     def check_restart_on_crc_mismatch(self):
         self._check_restart("CRC mismatch")
+    def check_restart_on_shutdown(self):
+        # Восстанавливать только при новом запуске Klippy и не повторять
+        # попытку после FIRMWARE_RESTART или обычного RESTART.
+        start_reason = self._printer.get_start_args().get("start_reason")
+        if (start_reason == 'startup' and self._restart_method == 'command'
+            and self._reset_cmd is not None):
+            self._check_restart("MCU остался в shutdown при запуске Klippy")
     def check_restart_on_send_config(self):
         if self._restart_method == 'rpi_usb':
             # Only configure mcu after usb power reset
@@ -1044,7 +1051,7 @@ class MCUConfigHelper:
                     "Pin '%s' is not a valid pin name on mcu '%s'"
                     % (enum_value, self._name))
             raise
-    def _send_get_config(self):
+    def _send_get_config(self, restart_on_shutdown=False):
         get_config_cmd = self._mcu.lookup_query_command(
             "get_config",
             "config is_config=%c crc=%u is_shutdown=%c move_count=%hu")
@@ -1052,16 +1059,21 @@ class MCUConfigHelper:
             return { 'is_config': 0, 'move_count': 500, 'crc': 0 }
         config_params = get_config_cmd.send()
         if self._conn_helper.is_shutdown():
+            if restart_on_shutdown:
+                # Сообщение об аварии могло прийти раньше ответа get_config.
+                self._conn_helper.get_restart_helper().check_restart_on_shutdown()
             raise error("MCU '%s' error during config: %s" % (
                 self._name, self._conn_helper.get_shutdown_msg()))
         if config_params['is_shutdown']:
+            if restart_on_shutdown:
+                self._conn_helper.get_restart_helper().check_restart_on_shutdown()
             raise error("Can not update MCU '%s' config as it is shutdown" % (
                 self._name,))
         return config_params
     def _connect(self):
         # Finalize the config and check if a restart is needed
         restart_helper = self._conn_helper.get_restart_helper()
-        config_params = self._send_get_config()
+        config_params = self._send_get_config(restart_on_shutdown=True)
         if not config_params['is_config']:
             # Not configured - sending full config will be required
             restart_helper.check_restart_on_send_config()
