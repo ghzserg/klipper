@@ -366,6 +366,10 @@ The following information is available in
 - `mcu_constants.<constant_name>`: Compile time constants reported by
   the micro-controller. The available constants may differ between
   micro-controller architectures and with each code revision.
+- `mcu_kconfig`: The minimal build configuration (`savedefconfig` output)
+  that the micro-controller firmware was compiled from, as reported by the
+  micro-controller. `None` if the firmware predates this feature or does not
+  provide it.
 - `last_stats.<statistics_name>`: Statistics information on the
   micro-controller connection.
 
@@ -518,9 +522,9 @@ The following information is available in the `system_stats` object
 
 The following information is available in
 
-[bme280 config_section_name](Config_Reference.md#bmp280bme280bme680-temperature-sensor),
+[bme280 config_section_name](Config_Reference.md#bmp180bmp280bme280bmp388bme680-temperature-sensor),
 [htu21d config_section_name](Config_Reference.md#htu21d-sensor),
-[sht3x config_section_name](Config_Reference.md#sht31-sensor),
+[sht3x config_section_name](Config_Reference.md#sht3x-sensor),
 [lm75 config_section_name](Config_Reference.md#lm75-temperature-sensor),
 [temperature_host config_section_name](Config_Reference.md#host-temperature-sensor)
 and
