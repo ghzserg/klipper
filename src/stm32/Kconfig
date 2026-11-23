@@ -557,4 +557,18 @@ config STM32_CANBUS_PH13_PH14
     bool
     default y if STM32_MMENU_CANBUS_PH13_PH14 || STM32_CMENU_CANBUS_PH13_PH14
 
+config FLASHFORGE_LOADCELL
+    bool "Enable Flashforge Load Cell support"
+    depends on MACH_STM32F1 || MACH_N32G45x
+    help
+      Enable support for communicating with the Flashforge Load Cell via UART5.
+      Uses PC12 (TX) and PD2 (RX) by default.
+
+config FLASHFORGE_TVOC
+    bool "Enable Flashforge TVOC support"
+    depends on MACH_STM32F1 || MACH_N32G45x
+    help
+      Enable support for communicating with the Flashforge TVOC via UART4.
+      Uses PC10 (TX) and PC11 (RX) by default.
+
 endif
