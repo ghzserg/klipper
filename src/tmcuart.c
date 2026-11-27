@@ -31,19 +31,17 @@ enum {
 static struct task_wake tmcuart_wake;
 
 #if CONFIG_MACH_N32G455
-// Ограниченный диагностический захват, только на N32G455.
-// Сырые ответы проверяются по CRC на хосте после завершения захвата.
-#define TU_BURST_MAX 128
-struct tmcuart_burst_sample {
-    uint32_t tx, rx, end;
-    uint8_t len, data[10];
-};
+// Диагностический поток только на N32G455. Два сырых ответа в пакете.
+// Хост проверяет CRC и непрерывность номеров измерений.
+#define TU_STREAM_MAX 6000
+#define TU_STREAM_SAMPLE 23
 static struct {
     struct tmcuart_s *owner;
-    uint32_t token, interval, next_clock;
+    uint32_t interval, next_clock;
     volatile uint32_t tx, rx, end;
-    uint8_t active, count, total, request[5];
-    struct tmcuart_burst_sample samples[TU_BURST_MAX];
+    uint16_t token, count, total;
+    uint8_t active, request[5], used;
+    uint8_t data[2 * TU_STREAM_SAMPLE];
 } burst;
 #endif
 
@@ -266,10 +264,11 @@ DECL_COMMAND(command_tmcuart_send, "tmcuart_send oid=%c write=%*s read=%c");
 // Разрешено читать только SG_RESULT (0x41), без записи регистров.
 // token позволяет безопасно повторить запрос при потере ответа.
 void
-command_tmcuart_burst_start(uint32_t *args)
+command_tmcuart_stream_start(uint32_t *args)
 {
-    uint8_t oid = args[0], addr = args[2], count = args[3];
-    uint32_t token = args[1], clock = args[4], interval_us = args[5];
+    uint8_t oid = args[0], addr = args[2];
+    uint16_t token = args[1], count = args[3];
+    uint32_t clock = args[4], interval_us = args[5];
     struct tmcuart_s *t = oid_lookup(oid, command_config_tmcuart);
     uint8_t status = 0;
     if (burst.owner == t && burst.token == token)
@@ -279,7 +278,7 @@ command_tmcuart_burst_start(uint32_t *args)
         goto report;
     }
     int32_t ahead = clock - timer_read_time();
-    if (addr > 3 || !count || count > TU_BURST_MAX
+    if (addr > 3 || !count || count > TU_STREAM_MAX
         || interval_us < 2000 || interval_us > 20000
         || ahead < (int32_t)timer_from_us(1000)
         || ahead > (int32_t)timer_from_us(2000000)) {
@@ -303,49 +302,35 @@ command_tmcuart_burst_start(uint32_t *args)
     burst.owner = t;
     burst.token = token;
     burst.count = count;
-    burst.total = 0;
+    burst.total = burst.used = 0;
     burst.interval = timer_from_us(interval_us);
     burst.next_clock = clock;
     burst.active = 1;
     tmcuart_start(t, burst.request, sizeof(burst.request), 10, clock);
 report:
-    sendf("tmcuart_burst_started oid=%c token=%u status=%c",
+    sendf("tmcuart_stream_started oid=%c token=%hu status=%c",
           oid, token, status);
 }
-DECL_COMMAND(command_tmcuart_burst_start,
-             "tmcuart_burst_start oid=%c token=%u addr=%c count=%c"
+DECL_COMMAND(command_tmcuart_stream_start,
+             "tmcuart_stream_start oid=%c token=%hu addr=%c count=%hu"
              " clock=%u interval_us=%u");
 
-// Чтение только после остановки; при активном захвате возвращаем прогресс.
+// Статус после передачи последнего пакета. Повторное чтение не меняет состояние.
 void
-command_tmcuart_burst_read(uint32_t *args)
+command_tmcuart_stream_status(uint32_t *args)
 {
-    uint8_t oid = args[0], index = args[2];
-    uint32_t token = args[1];
+    uint8_t oid = args[0], status = 2;
+    uint16_t token = args[1], total = 0;
     struct tmcuart_s *t = oid_lookup(oid, command_config_tmcuart);
-    uint8_t status = 0, data[23], len = 0, total = 0;
-    if (burst.owner != t || burst.token != token)
-        status = 2;
-    else if (burst.active)
-        status = 1;
-    else if (index < burst.total) {
-        struct tmcuart_burst_sample *s = &burst.samples[index];
-        uint32_t clocks[] = {s->tx, s->rx, s->end};
-        for (uint_fast8_t i = 0; i < 3; i++)
-            for (uint_fast8_t j = 0; j < 4; j++)
-                data[4 * i + j] = clocks[i] >> (8 * j);
-        data[12] = s->len;
-        memcpy(&data[13], s->data, sizeof(s->data));
-        len = sizeof(data);
-    } else
-        status = 2;
-    if (burst.owner == t && burst.token == token)
+    if (burst.owner == t && burst.token == token) {
+        status = burst.active;
         total = burst.total;
-    sendf("tmcuart_burst_data oid=%c token=%u status=%c total=%c"
-          " index=%c data=%*s", oid, token, status, total, index, len, data);
+    }
+    sendf("tmcuart_stream_status oid=%c token=%hu status=%c total=%hu",
+          oid, token, status, total);
 }
-DECL_COMMAND(command_tmcuart_burst_read,
-             "tmcuart_burst_read oid=%c token=%u index=%c");
+DECL_COMMAND(command_tmcuart_stream_status,
+             "tmcuart_stream_status oid=%c token=%hu");
 #endif
 
 // Report completed response message back to host
@@ -364,24 +349,33 @@ tmcuart_task(void)
         irq_enable();
 #if CONFIG_MACH_N32G455
         if (burst.active && burst.owner == t) {
-            struct tmcuart_burst_sample *s = &burst.samples[burst.total++];
-            s->tx = burst.tx;
-            s->rx = burst.rx;
-            s->end = burst.end;
-            s->len = t->read_count / 8;
-            memset(s->data, 0, sizeof(s->data));
-            memcpy(s->data, t->data, s->len);
+            uint8_t *data = &burst.data[burst.used];
+            uint32_t clocks[] = {burst.tx, burst.rx, burst.end};
+            for (uint_fast8_t i = 0; i < 3; i++)
+                for (uint_fast8_t j = 0; j < 4; j++)
+                    data[4 * i + j] = clocks[i] >> (8 * j);
+            data[12] = t->read_count / 8;
+            memset(&data[13], 0, 10);
+            memcpy(&data[13], t->data, data[12]);
+            burst.used += TU_STREAM_SAMPLE;
+            burst.total++;
             if (burst.total >= burst.count) {
                 burst.active = 0;
-                continue;
+            } else {
+                // Следующий запрос планируется до передачи пакета на хост.
+                uint32_t next = burst.next_clock + burst.interval;
+                uint32_t earliest = timer_read_time() + timer_from_us(200);
+                if (timer_is_before(next, earliest))
+                    next = earliest;
+                burst.next_clock = next;
+                tmcuart_start(t, burst.request, sizeof(burst.request), 10, next);
             }
-            // Не пытаемся догонять пропущенные периоды.
-            uint32_t next = burst.next_clock + burst.interval;
-            uint32_t earliest = timer_read_time() + timer_from_us(200);
-            if (timer_is_before(next, earliest))
-                next = earliest;
-            burst.next_clock = next;
-            tmcuart_start(t, burst.request, sizeof(burst.request), 10, next);
+            if (burst.used == sizeof(burst.data) || !burst.active) {
+                uint16_t first = burst.total - burst.used / TU_STREAM_SAMPLE;
+                sendf("tmcuart_stream_data oid=%c token=%hu first=%hu data=%*s",
+                      oid, burst.token, first, burst.used, burst.data);
+                burst.used = 0;
+            }
             continue;
         }
 #endif
