@@ -398,10 +398,11 @@ tmcuart_task(void)
                 more = timer_is_before(next, burst.deadline);
                 if (more) {
                     burst.next_clock = next;
-                    tmcuart_start(t, burst.request, sizeof(burst.request), 10, next);
+                    tmcuart_start(t, burst.request, sizeof(burst.request),
+                                  10, next);
                 }
             }
-            // CRC вне обработчика таймера. Ошибка сохраняется отдельной записью.
+            // CRC вне таймера. Ошибки сохраняем отдельными записями.
             uint16_t sg = tmcuart_sg_decode(raw, len);
             if (sg == TU_SG_INVALID) {
                 burst.errors++;
