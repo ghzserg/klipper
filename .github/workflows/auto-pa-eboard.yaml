@@ -20,6 +20,7 @@ jobs:
           make olddefconfig
           grep -q '^CONFIG_MACH_N32G455=y$' .config
           make -j2
+          python3 -c 'import json; c=json.load(open("out/klipper.dict"))["commands"]; assert any(k.startswith("tmcuart_burst_start ") for k in c), "Missing burst_start"; assert any(k.startswith("tmcuart_burst_read ") for k in c), "Missing burst_read"'
           arm-none-eabi-size out/klipper.elf
           ./scripts/check-software-div.sh .config out/klipper.elf
           cp out/klipper.hex out/Eboard.hex
