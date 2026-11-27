@@ -280,6 +280,7 @@ command_tmcuart_stream_start(uint32_t *args)
     int32_t ahead = clock - timer_read_time();
     if (addr > 3 || !count || count > TU_STREAM_MAX
         || interval_us < 2000 || interval_us > 20000
+        || (uint32_t)count * interval_us > 12000000
         || ahead < (int32_t)timer_from_us(1000)
         || ahead > (int32_t)timer_from_us(2000000)) {
         status = 2;
@@ -326,7 +327,7 @@ command_tmcuart_stream_status(uint32_t *args)
         status = burst.active;
         total = burst.total;
     }
-    sendf("tmcuart_stream_status oid=%c token=%hu status=%c total=%hu",
+    sendf("tmcuart_stream_state oid=%c token=%hu status=%c total=%hu",
           oid, token, status, total);
 }
 DECL_COMMAND(command_tmcuart_stream_status,
