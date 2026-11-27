@@ -14,13 +14,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi
+      - name: Test SG encoding and CRC
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I src test/tmcuart_sg_test.c -o /tmp/tmcuart_sg_test
+          /tmp/tmcuart_sg_test
       - name: Build AD5M eboard
         run: |
           cp .config-eboard-ad5m .config
           make olddefconfig
           grep -q '^CONFIG_MACH_N32G455=y$' .config
           make -j2
-          python3 -c 'import json; d=json.load(open("out/klipper.dict")); c=d["commands"]; assert any(k.startswith("tmcuart_stream_data ") for k in d["responses"]), "Missing stream_data"; assert any(k.startswith("tmcuart_stream_state ") for k in d["responses"]), "Missing stream_state"; assert any(k.startswith("tmcuart_stream_start ") for k in c), "Missing stream_start"; assert any(k.startswith("tmcuart_stream_status ") for k in c), "Missing stream_status"'
+          python3 -c 'import json; d=json.load(open("out/klipper.dict")); assert all(any(k.startswith("tmcuart_buffer_"+name+" ") for k in d["commands"]) for name in ("start","status","read")); assert all(any(k.startswith("tmcuart_buffer_"+name+" ") for k in d["responses"]) for name in ("started","state","data"))'
           arm-none-eabi-size out/klipper.elf
           ./scripts/check-software-div.sh .config out/klipper.elf
           cp out/klipper.hex out/Eboard.hex
