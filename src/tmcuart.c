@@ -29,6 +29,23 @@ enum {
 
 static struct task_wake tmcuart_wake;
 
+#if CONFIG_MACH_N32G455
+// Ограниченный диагностический захват, только на N32G455.
+// Сырые ответы проверяются по CRC на хосте после завершения захвата.
+#define TU_BURST_MAX 128
+struct tmcuart_burst_sample {
+    uint32_t tx, rx, end;
+    uint8_t len, data[10];
+};
+static struct {
+    struct tmcuart_s *owner;
+    uint32_t token, interval, next_clock;
+    volatile uint32_t tx, rx, end;
+    uint8_t active, count, total, request[5];
+    struct tmcuart_burst_sample samples[TU_BURST_MAX];
+} burst;
+#endif
+
 // Restore uart line to normal "idle" mode
 static void
 tmcuart_reset_line(struct tmcuart_s *t)
@@ -44,6 +61,10 @@ tmcuart_reset_line(struct tmcuart_s *t)
 static uint_fast8_t
 tmcuart_finalize(struct tmcuart_s *t)
 {
+#if CONFIG_MACH_N32G455
+    if (burst.active && burst.owner == t)
+        burst.end = timer_read_time();
+#endif
     tmcuart_reset_line(t);
     t->flags |= TU_REPORT;
     sched_wake_task(&tmcuart_wake);
@@ -81,6 +102,10 @@ tmcuart_read_sync_event(struct timer *timer)
         t->flags |= TU_READ_SYNC;
     } else if (t->flags & TU_READ_SYNC) {
         // Now synchronized - begin reading
+#if CONFIG_MACH_N32G455
+        if (burst.active && burst.owner == t)
+            burst.rx = timer_read_time();
+#endif
         t->pos = 0;
         t->timer.func = tmcuart_read_event;
         return tmcuart_read_event(timer);
@@ -153,6 +178,12 @@ tmcuart_send_sync_event(struct timer *timer)
     // Determine next wakeup time
     t->pos++;
     if (t->pos == 1) {
+#if CONFIG_MACH_N32G455
+        if (burst.active && burst.owner == t) {
+            burst.tx = cur;
+            burst.rx = 0;
+        }
+#endif
         // First bit just sent - record scheduling offset for later use
         uint32_t offset = cur - t->timer.waketime;
         t->bit_time = offset;
@@ -186,19 +217,11 @@ DECL_COMMAND(command_config_tmcuart,
              "config_tmcuart oid=%c rx_pin=%u pull_up=%c"
              " tx_pin=%u bit_time=%u");
 
-// Parse and schedule a TMC UART transmission request
-void
-command_tmcuart_send(uint32_t *args)
+// Подготовка обычного или диагностического UART-запроса.
+static void
+tmcuart_start(struct tmcuart_s *t, const uint8_t *write, uint8_t write_len
+              , uint8_t read_len, uint32_t clock)
 {
-    struct tmcuart_s *t = oid_lookup(args[0], command_config_tmcuart);
-    if (t->flags & TU_ACTIVE)
-        // Uart is busy - silently drop this request (host should retransmit)
-        return;
-    uint8_t write_len = args[1];
-    uint8_t *write = command_decode_ptr(args[2]);
-    uint8_t read_len = args[3];
-    if (write_len > sizeof(t->data) || read_len > sizeof(t->data))
-        shutdown("tmcuart data too large");
     memcpy(t->data, write, write_len);
     t->pos = 0;
     t->flags = (t->flags & (TU_LINE_HIGH|TU_PULLUP|TU_SINGLE_WIRE)) | TU_ACTIVE;
@@ -211,11 +234,118 @@ command_tmcuart_send(uint32_t *args)
         t->timer.func = tmcuart_send_event;
     }
     irq_disable();
-    t->timer.waketime = timer_read_time() + timer_from_us(200);
+    t->timer.waketime = clock;
     sched_add_timer(&t->timer);
     irq_enable();
 }
+
+// Parse and schedule a TMC UART transmission request
+void
+command_tmcuart_send(uint32_t *args)
+{
+    struct tmcuart_s *t = oid_lookup(args[0], command_config_tmcuart);
+#if CONFIG_MACH_N32G455
+    if (burst.active && burst.owner == t)
+        return;
+#endif
+    if (t->flags & TU_ACTIVE)
+        // Uart is busy - silently drop this request (host should retransmit)
+        return;
+    uint8_t write_len = args[1];
+    uint8_t *write = command_decode_ptr(args[2]);
+    uint8_t read_len = args[3];
+    if (write_len > sizeof(t->data) || read_len > sizeof(t->data))
+        shutdown("tmcuart data too large");
+    tmcuart_start(t, write, write_len, read_len,
+                  timer_read_time() + timer_from_us(200));
+}
 DECL_COMMAND(command_tmcuart_send, "tmcuart_send oid=%c write=%*s read=%c");
+
+#if CONFIG_MACH_N32G455
+// Разрешено читать только SG_RESULT (0x41), без записи регистров.
+// token позволяет безопасно повторить запрос при потере ответа.
+void
+command_tmcuart_burst_start(uint32_t *args)
+{
+    uint8_t oid = args[0], addr = args[2], count = args[3];
+    uint32_t token = args[1], clock = args[4], interval_us = args[5];
+    struct tmcuart_s *t = oid_lookup(oid, command_config_tmcuart);
+    uint8_t status = 0;
+    if (burst.owner == t && burst.token == token)
+        goto report;
+    if (burst.active || (t->flags & (TU_ACTIVE | TU_REPORT))) {
+        status = 1;
+        goto report;
+    }
+    int32_t ahead = clock - timer_read_time();
+    if (addr > 3 || !count || count > TU_BURST_MAX
+        || interval_us < 2000 || interval_us > 20000
+        || ahead < (int32_t)timer_from_us(1000)
+        || ahead > (int32_t)timer_from_us(2000000)) {
+        status = 2;
+        goto report;
+    }
+
+    uint8_t frame[4] = {0xf5, addr, 0x41, 0};
+    uint8_t crc = 0;
+    for (uint_fast8_t i = 0; i < 3; i++) {
+        uint8_t b = frame[i];
+        for (uint_fast8_t j = 0; j < 8; j++, b >>= 1)
+            crc = (crc << 1) ^ (((crc >> 7) ^ (b & 1)) ? 0x07 : 0);
+    }
+    frame[3] = crc;
+    uint64_t encoded = 0;
+    for (uint_fast8_t i = 0; i < 4; i++)
+        encoded |= (uint64_t)((frame[i] << 1) | 0x200) << (10 * i);
+    for (uint_fast8_t i = 0; i < 5; i++)
+        burst.request[i] = encoded >> (8 * i);
+    burst.owner = t;
+    burst.token = token;
+    burst.count = count;
+    burst.total = 0;
+    burst.interval = timer_from_us(interval_us);
+    burst.next_clock = clock;
+    burst.active = 1;
+    tmcuart_start(t, burst.request, sizeof(burst.request), 10, clock);
+report:
+    sendf("tmcuart_burst_started oid=%c token=%u status=%c",
+          oid, token, status);
+}
+DECL_COMMAND(command_tmcuart_burst_start,
+             "tmcuart_burst_start oid=%c token=%u addr=%c count=%c"
+             " clock=%u interval_us=%u");
+
+// Чтение только после остановки; при активном захвате возвращаем прогресс.
+void
+command_tmcuart_burst_read(uint32_t *args)
+{
+    uint8_t oid = args[0], index = args[2];
+    uint32_t token = args[1];
+    struct tmcuart_s *t = oid_lookup(oid, command_config_tmcuart);
+    uint8_t status = 0, data[23], len = 0, total = 0;
+    if (burst.owner != t || burst.token != token)
+        status = 2;
+    else if (burst.active)
+        status = 1;
+    else if (index < burst.total) {
+        struct tmcuart_burst_sample *s = &burst.samples[index];
+        uint32_t clocks[] = {s->tx, s->rx, s->end};
+        for (uint_fast8_t i = 0; i < 3; i++)
+            for (uint_fast8_t j = 0; j < 4; j++)
+                data[4 * i + j] = clocks[i] >> (8 * j);
+        data[12] = s->len;
+        memcpy(&data[13], s->data, sizeof(s->data));
+        len = sizeof(data);
+    } else
+        status = 2;
+    if (burst.owner == t && burst.token == token)
+        total = burst.total;
+    sendf("tmcuart_burst_data oid=%c token=%u status=%c total=%c"
+          " index=%c data=%*s", oid, token, status, total, index, len, data);
+}
+DECL_COMMAND(command_tmcuart_burst_read,
+             "tmcuart_burst_read oid=%c token=%u index=%c");
+#endif
 
 // Report completed response message back to host
 void
@@ -231,6 +361,29 @@ tmcuart_task(void)
         irq_disable();
         t->flags &= ~TU_REPORT;
         irq_enable();
+#if CONFIG_MACH_N32G455
+        if (burst.active && burst.owner == t) {
+            struct tmcuart_burst_sample *s = &burst.samples[burst.total++];
+            s->tx = burst.tx;
+            s->rx = burst.rx;
+            s->end = burst.end;
+            s->len = t->read_count / 8;
+            memset(s->data, 0, sizeof(s->data));
+            memcpy(s->data, t->data, s->len);
+            if (burst.total >= burst.count) {
+                burst.active = 0;
+                continue;
+            }
+            // Не пытаемся догонять пропущенные периоды.
+            uint32_t next = burst.next_clock + burst.interval;
+            uint32_t earliest = timer_read_time() + timer_from_us(200);
+            if (timer_is_before(next, earliest))
+                next = earliest;
+            burst.next_clock = next;
+            tmcuart_start(t, burst.request, sizeof(burst.request), 10, next);
+            continue;
+        }
+#endif
         sendf("tmcuart_response oid=%c read=%*s"
               , oid, t->read_count / 8, t->data);
     }
@@ -240,6 +393,10 @@ DECL_TASK(tmcuart_task);
 void
 tmcuart_shutdown(void)
 {
+#if CONFIG_MACH_N32G455
+    burst.active = 0;
+    burst.owner = NULL;
+#endif
     uint8_t i;
     struct tmcuart_s *t;
     foreach_oid(i, t, command_config_tmcuart) {
