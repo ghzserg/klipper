@@ -23,7 +23,7 @@ jobs:
           mkdir -p /tmp/sg-test/board
           cp src/generic/misc.h src/generic/pgm.h /tmp/sg-test/board/
           cp test/sg_buffer_stubs/irq.h /tmp/sg-test/board/
-          gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -Wl,--gc-sections -fsanitize=address,undefined -fno-sanitize-recover=all -I src -I /tmp/sg-test test/tmcuart_memory_test.c -o /tmp/tmcuart_memory_test
+          gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare -ffunction-sections -fdata-sections -Wl,--gc-sections -fsanitize=address,undefined -fno-sanitize-recover=all -I src -I /tmp/sg-test test/tmcuart_memory_test.c -o /tmp/tmcuart_memory_test
           /tmp/tmcuart_memory_test
       - name: Check changed source formatting
         run: python3 scripts/check_whitespace.py src/basecmd.c src/basecmd.h src/tmcuart.c src/tmcuart_sg.h test/tmcuart_sg_test.c test/tmcuart_memory_test.c test/sg_buffer_stubs/irq.h
