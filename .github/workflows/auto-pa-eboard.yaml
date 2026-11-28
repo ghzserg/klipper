@@ -1,0 +1,46 @@
+name: Auto PA eboard AD5M
+
+on:
+  push:
+    branches: [auto-pa-mcu-test]
+  workflow_dispatch:
+
+jobs:
+  eboard:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi
+      - name: Test SG encoding and CRC
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I src test/tmcuart_sg_test.c -o /tmp/tmcuart_sg_test
+          /tmp/tmcuart_sg_test
+      - name: Test RAM reservation and move queue
+        run: |
+          mkdir -p /tmp/sg-test/board
+          cp src/generic/misc.h src/generic/pgm.h /tmp/sg-test/board/
+          cp test/sg_buffer_stubs/irq.h /tmp/sg-test/board/
+          gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare -ffunction-sections -fdata-sections -Wl,--gc-sections -fsanitize=address,undefined -fno-sanitize-recover=all -I src -I /tmp/sg-test test/tmcuart_memory_test.c -o /tmp/tmcuart_memory_test
+          /tmp/tmcuart_memory_test
+      - name: Check changed source formatting
+        run: python3 scripts/check_whitespace.py src/basecmd.c src/basecmd.h src/tmcuart.c src/tmcuart_sg.h test/tmcuart_sg_test.c test/tmcuart_memory_test.c test/sg_buffer_stubs/irq.h
+      - name: Build AD5M eboard
+        run: |
+          cp .config-eboard-ad5m .config
+          make olddefconfig
+          grep -q '^CONFIG_MACH_N32G455=y$' .config
+          make -j2
+          python3 -c 'import json; d=json.load(open("out/klipper.dict")); assert all(any(k.startswith("tmcuart_buffer_"+name+" ") for k in d["commands"]) for name in ("start","status","read")); assert all(any(k.startswith("tmcuart_buffer_"+name+" ") for k in d["responses"]) for name in ("started","state","data"))'
+          arm-none-eabi-size out/klipper.elf
+          ./scripts/check-software-div.sh .config out/klipper.elf
+          cp out/klipper.hex out/Eboard.hex
+      - uses: actions/upload-artifact@v4
+        with:
+          name: auto-pa-eboard-ad5m
+          path: |
+            out/Eboard.hex
+            out/klipper.dict
+            out/klipper.elf
