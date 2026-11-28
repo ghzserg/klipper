@@ -18,11 +18,15 @@
  ****************************************************************/
 
 static void *alloc_end;
+static void *optional_scratch;
+static size_t optional_scratch_size;
 
 void
 alloc_init(void)
 {
     alloc_end = (void*)ALIGN((size_t)dynmem_start(), __alignof__(void*));
+    optional_scratch = NULL;
+    optional_scratch_size = 0;
 }
 DECL_INIT(alloc_init);
 
@@ -68,6 +72,25 @@ static int
 is_finalized(void)
 {
     return !!move_count;
+}
+
+// Резервируем диагностическую память только после полной очереди движений.
+// Один повторно используемый буфер на конфигурацию; при нехватке памяти отказ.
+void *
+alloc_optional_scratch(size_t size, uint32_t *available)
+{
+    size_t free = (uint8_t*)dynmem_end() - (uint8_t*)alloc_end;
+    *available = free + optional_scratch_size;
+    if (!is_finalized() || move_count != 1024 || !size)
+        return NULL;
+    if (optional_scratch)
+        return size <= optional_scratch_size ? optional_scratch : NULL;
+    size = ALIGN(size, __alignof__(void*));
+    if (size > free)
+        return NULL;
+    optional_scratch = alloc_chunk(size);
+    optional_scratch_size = size;
+    return optional_scratch;
 }
 
 // Free previously allocated storage from move_alloc(). Caller must
